@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "github-mcp-server": {
+      "command": "python",
+      "args": ["server.py"],
+      "env": {
+        "GITHUB_TOKEN": "<your-github-personal-access-token>"
+      },
+      "description": "GitHub MCP Server – read/write files & prompts, deploy GitHub Pages, manage repos, branches, issues, and more."
+    }
+  }
+}
