@@ -5,45 +5,237 @@ Provides tools to:
 - Read/write files and prompts in GitHub repositories
 - Deploy content to GitHub Pages
 - Manage branches, commits, issues, and repositories
+
+Authentication styles supported (checked in priority order):
+1. Explicit ``token`` argument passed directly to any tool
+2. GitHub App Installation  (GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY[_FILE] + GITHUB_APP_INSTALLATION_ID)
+3. GitHub App JWT only      (GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY[_FILE], no installation id)
+4. OAuth App user token     (GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET + GITHUB_OAUTH_TOKEN)
+5. Token from file          (GITHUB_TOKEN_FILE)
+6. Personal / fine-grained access token from env  (GITHUB_TOKEN | GH_TOKEN | GITHUB_PERSONAL_ACCESS_TOKEN)
+7. Login + password         (GITHUB_LOGIN + GITHUB_PASSWORD)  [deprecated by GitHub but still functional]
+8. Netrc credentials        (GITHUB_USE_NETRC=true, reads ~/.netrc)
+
+Connection / firewall options (all via environment variables):
+  GITHUB_BASE_URL      – Custom API base URL for GitHub Enterprise Server (GHES)
+                         e.g. https://github.mycompany.com/api/v3
+  GITHUB_PROXY         – HTTP/HTTPS proxy URL forwarded to the underlying
+                         requests session, e.g. http://proxy.corp.example.com:8080
+                         Standard HTTPS_PROXY / HTTP_PROXY env vars also work.
+  GITHUB_VERIFY_SSL    – Set to "false" to disable SSL verification (useful when
+                         a corporate firewall performs TLS inspection).
+                         Set to a file path to use a custom CA bundle.
+  GITHUB_TIMEOUT       – Request timeout in seconds (default: 15).
 """
 
-import base64
 import os
 from typing import Optional
 
+from dotenv import load_dotenv
 from fastmcp import FastMCP
-from github import Github, GithubException
+from github import Auth, Github, GithubException
 from github import InputGitAuthor
 
+load_dotenv()
+
 # ---------------------------------------------------------------------------
-# Initialise server and GitHub client
+# Initialise server
 # ---------------------------------------------------------------------------
 
 mcp = FastMCP(
     name="github-mcp-server",
     instructions=(
         "A GitHub MCP server that lets you read and write files, manage prompts, "
-        "deploy to GitHub Pages, and perform common repository operations using "
-        "a GitHub Personal Access Token."
+        "deploy to GitHub Pages, and perform common repository operations. "
+        "Supports multiple authentication styles including PAT, GitHub Apps, "
+        "OAuth, .netrc, and GitHub Enterprise Server."
     ),
 )
 
+# Module-level cached client (used when no per-call token is supplied)
 _github_client: Optional[Github] = None
 
 
+# ---------------------------------------------------------------------------
+# Auth / connection helpers
+# ---------------------------------------------------------------------------
+
+
+def _connection_kwargs() -> dict:
+    """
+    Build keyword arguments common to all Github() instantiations:
+    base_url, verify, timeout, and proxy injection.
+    """
+    kwargs: dict = {}
+
+    # GitHub Enterprise Server base URL
+    base_url = os.getenv("GITHUB_BASE_URL")
+    if base_url:
+        kwargs["base_url"] = base_url.rstrip("/")
+
+    # SSL verification (supports "false" to disable, or a CA bundle path)
+    verify_env = os.getenv("GITHUB_VERIFY_SSL", "true").strip().lower()
+    if verify_env == "false":
+        kwargs["verify"] = False
+    elif verify_env not in ("true", "1", "yes", ""):
+        # Non-boolean → treat as path to a CA bundle file
+        kwargs["verify"] = verify_env
+
+    # Request timeout
+    timeout_env = os.getenv("GITHUB_TIMEOUT")
+    if timeout_env:
+        try:
+            kwargs["timeout"] = int(timeout_env)
+        except ValueError:
+            pass
+
+    # Proxy – inject into environment so that requests picks it up automatically.
+    # We support GITHUB_PROXY as an alias for HTTPS_PROXY / HTTP_PROXY.
+    proxy = os.getenv("GITHUB_PROXY")
+    if proxy:
+        os.environ.setdefault("HTTPS_PROXY", proxy)
+        os.environ.setdefault("HTTP_PROXY", proxy)
+
+    return kwargs
+
+
+def _build_github_client() -> Github:
+    """
+    Build a Github client by trying every supported authentication strategy
+    in priority order.  Connection settings (proxy, SSL, base URL, timeout)
+    are applied to every strategy.
+    """
+    ckw = _connection_kwargs()
+
+    # ------------------------------------------------------------------
+    # 1. GitHub App Installation auth
+    #    Requires: GITHUB_APP_ID + (GITHUB_APP_PRIVATE_KEY or
+    #              GITHUB_APP_PRIVATE_KEY_FILE) + GITHUB_APP_INSTALLATION_ID
+    # ------------------------------------------------------------------
+    app_id = os.getenv("GITHUB_APP_ID")
+    installation_id_env = os.getenv("GITHUB_APP_INSTALLATION_ID")
+    private_key = _load_app_private_key()
+
+    if app_id and private_key and installation_id_env:
+        app_auth = Auth.AppAuth(int(app_id), private_key)
+        inst_auth = Auth.AppInstallationAuth(app_auth, int(installation_id_env))
+        return Github(auth=inst_auth, **ckw)
+
+    # ------------------------------------------------------------------
+    # 2. GitHub App JWT auth (no installation – server-level API access)
+    #    Requires: GITHUB_APP_ID + (GITHUB_APP_PRIVATE_KEY or
+    #              GITHUB_APP_PRIVATE_KEY_FILE)
+    # ------------------------------------------------------------------
+    if app_id and private_key:
+        app_auth = Auth.AppAuth(int(app_id), private_key)
+        return Github(auth=app_auth, **ckw)
+
+    # ------------------------------------------------------------------
+    # 3. OAuth App user token
+    #    Requires: GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET + GITHUB_OAUTH_TOKEN
+    # ------------------------------------------------------------------
+    client_id = os.getenv("GITHUB_CLIENT_ID")
+    client_secret = os.getenv("GITHUB_CLIENT_SECRET")
+    oauth_token = os.getenv("GITHUB_OAUTH_TOKEN")
+    if client_id and client_secret and oauth_token:
+        user_auth = Auth.AppUserAuth(
+            client_id=client_id,
+            client_secret=client_secret,
+            token=oauth_token,
+        )
+        return Github(auth=user_auth, **ckw)
+
+    # ------------------------------------------------------------------
+    # 4. Token from file
+    #    Requires: GITHUB_TOKEN_FILE pointing to a file whose first line
+    #              is the token.
+    # ------------------------------------------------------------------
+    token_file = os.getenv("GITHUB_TOKEN_FILE")
+    if token_file:
+        try:
+            with open(token_file) as fh:
+                file_token = fh.readline().strip()
+            if file_token:
+                return Github(auth=Auth.Token(file_token), **ckw)
+        except OSError as exc:
+            raise ValueError(
+                f"GITHUB_TOKEN_FILE is set but the file could not be read: {exc}"
+            ) from exc
+
+    # ------------------------------------------------------------------
+    # 5. Personal / fine-grained access token from environment variable
+    #    Checks GITHUB_TOKEN, GH_TOKEN, GITHUB_PERSONAL_ACCESS_TOKEN
+    # ------------------------------------------------------------------
+    pat = (
+        os.getenv("GITHUB_TOKEN")
+        or os.getenv("GH_TOKEN")
+        or os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
+    )
+    if pat:
+        return Github(auth=Auth.Token(pat), **ckw)
+
+    # ------------------------------------------------------------------
+    # 6. Login + password (Basic auth – deprecated but functional)
+    #    Requires: GITHUB_LOGIN + GITHUB_PASSWORD
+    # ------------------------------------------------------------------
+    login = os.getenv("GITHUB_LOGIN")
+    password = os.getenv("GITHUB_PASSWORD")
+    if login and password:
+        return Github(auth=Auth.Login(login, password), **ckw)
+
+    # ------------------------------------------------------------------
+    # 7. Netrc credentials
+    #    Activated by: GITHUB_USE_NETRC=true
+    #    Reads credentials from ~/.netrc for api.github.com (or the
+    #    GITHUB_BASE_URL host for GHES).
+    # ------------------------------------------------------------------
+    if os.getenv("GITHUB_USE_NETRC", "").strip().lower() in ("true", "1", "yes"):
+        return Github(auth=Auth.NetrcAuth(), **ckw)
+
+    raise ValueError(
+        "No GitHub credentials found. Provide one of the following:\n"
+        "  • GITHUB_TOKEN (or GH_TOKEN / GITHUB_PERSONAL_ACCESS_TOKEN)\n"
+        "  • GITHUB_TOKEN_FILE\n"
+        "  • GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY[_FILE] + GITHUB_APP_INSTALLATION_ID\n"
+        "  • GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY[_FILE]  (JWT / app-level only)\n"
+        "  • GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET + GITHUB_OAUTH_TOKEN\n"
+        "  • GITHUB_LOGIN + GITHUB_PASSWORD\n"
+        "  • GITHUB_USE_NETRC=true  (reads ~/.netrc)\n"
+        "See README.md for full details."
+    )
+
+
+def _load_app_private_key() -> Optional[str]:
+    """
+    Return the GitHub App private key as a string, or None if not configured.
+    Checks GITHUB_APP_PRIVATE_KEY (raw PEM string) first, then
+    GITHUB_APP_PRIVATE_KEY_FILE (path to a PEM file).
+    """
+    raw = os.getenv("GITHUB_APP_PRIVATE_KEY")
+    if raw:
+        # Allow the PEM to be stored with literal \n sequences in the env var
+        return raw.replace("\\n", "\n")
+    key_file = os.getenv("GITHUB_APP_PRIVATE_KEY_FILE")
+    if key_file:
+        with open(key_file) as fh:
+            return fh.read()
+    return None
+
+
 def _get_github(token: Optional[str] = None) -> Github:
-    """Return a (cached) GitHub client, preferring the supplied token."""
+    """
+    Return a GitHub client.
+
+    If *token* is supplied it is used directly (no caching).
+    Otherwise a module-level cached client is returned, building it on first
+    use via :func:`_build_github_client`.
+    """
     global _github_client
     if token:
-        return Github(token)
+        ckw = _connection_kwargs()
+        return Github(auth=Auth.Token(token), **ckw)
     if _github_client is None:
-        pat = os.getenv("GITHUB_TOKEN") or os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
-        if not pat:
-            raise ValueError(
-                "No GitHub token provided. Set the GITHUB_TOKEN environment variable "
-                "or pass a token argument to the tool."
-            )
-        _github_client = Github(pat)
+        _github_client = _build_github_client()
     return _github_client
 
 

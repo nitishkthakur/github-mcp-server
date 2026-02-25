@@ -249,13 +249,164 @@ Open a new issue with an optional body and labels.
 
 ## 🔑 Authentication
 
-All tools accept an optional `token` argument that takes precedence over the
-environment variable. This lets a single server instance operate across multiple
-GitHub accounts.
+The server supports **eight authentication strategies** tried in the priority
+order listed below.  All tools also accept an optional `token` argument that
+immediately overrides every environment-based strategy.
 
-Environment variables checked (in order):
-1. `GITHUB_TOKEN`
-2. `GITHUB_PERSONAL_ACCESS_TOKEN`
+---
+
+### Strategy 1 – Personal / Fine-grained Access Token *(most common)*
+
+```
+GITHUB_TOKEN=ghp_xxxxxxxxxxxx
+# or
+GH_TOKEN=ghp_xxxxxxxxxxxx
+# or
+GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxxxxxxxxxxx
+```
+
+---
+
+### Strategy 2 – Token stored in a file
+
+Useful when secrets management injects tokens as files (e.g. Kubernetes
+Secrets, Docker secrets).
+
+```
+GITHUB_TOKEN_FILE=/run/secrets/github_token
+```
+
+The first line of the file is used as the token.
+
+---
+
+### Strategy 3 – GitHub App Installation auth *(recommended for organisations)*
+
+```
+GITHUB_APP_ID=123456
+GITHUB_APP_INSTALLATION_ID=78901234
+GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+# or store the key in a file:
+GITHUB_APP_PRIVATE_KEY_FILE=/run/secrets/github_app.pem
+```
+
+`GITHUB_APP_PRIVATE_KEY` may contain literal `\n` sequences — they are
+automatically expanded to real newlines.
+
+---
+
+### Strategy 4 – GitHub App JWT (app-level, no installation)
+
+Same as strategy 3 but **without** `GITHUB_APP_INSTALLATION_ID`.  Grants
+access to app-level API endpoints only (e.g. listing installations).
+
+```
+GITHUB_APP_ID=123456
+GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n..."
+```
+
+---
+
+### Strategy 5 – OAuth App user token
+
+```
+GITHUB_CLIENT_ID=Iv1.abcdef123456
+GITHUB_CLIENT_SECRET=abc123...
+GITHUB_OAUTH_TOKEN=ghu_xxxxxxxxxxxx
+```
+
+---
+
+### Strategy 6 – Login + password *(deprecated by GitHub)*
+
+```
+GITHUB_LOGIN=myusername
+GITHUB_PASSWORD=mypassword
+```
+
+> ⚠️ GitHub has deprecated password authentication for the API.
+> Use a PAT or GitHub App instead where possible.
+
+---
+
+### Strategy 7 – `.netrc` credentials
+
+```
+GITHUB_USE_NETRC=true
+```
+
+The server reads credentials from `~/.netrc` for `api.github.com` (or for the
+`GITHUB_BASE_URL` host when using GHES).
+
+---
+
+## 🌐 Corporate firewall & enterprise options
+
+All settings below are controlled via environment variables and are **combined
+with whichever auth strategy is active**.
+
+### GitHub Enterprise Server (GHES)
+
+```
+GITHUB_BASE_URL=https://github.mycompany.com/api/v3
+```
+
+### HTTP/HTTPS proxy
+
+```
+# Option A – GITHUB_PROXY (alias for HTTPS_PROXY + HTTP_PROXY)
+GITHUB_PROXY=http://proxy.corp.example.com:8080
+
+# Option B – standard env vars (picked up automatically by requests)
+HTTPS_PROXY=http://proxy.corp.example.com:8080
+HTTP_PROXY=http://proxy.corp.example.com:8080
+```
+
+> **SOCKS proxy** is also supported by `requests`:
+> `GITHUB_PROXY=socks5://proxy.corp.example.com:1080`
+> (requires `pip install requests[socks]`)
+
+### SSL / TLS inspection (corporate MITM proxies)
+
+```
+# Disable SSL verification entirely (not recommended for production)
+GITHUB_VERIFY_SSL=false
+
+# OR provide the path to your corporate CA bundle
+GITHUB_VERIFY_SSL=/etc/ssl/certs/corp-ca-bundle.crt
+```
+
+### Request timeout
+
+```
+GITHUB_TIMEOUT=30    # seconds (default: 15)
+```
+
+---
+
+### Complete `.env` example for a corporate environment
+
+```dotenv
+# Auth
+GITHUB_TOKEN=ghp_xxxxxxxxxxxx
+
+# Enterprise / firewall
+GITHUB_BASE_URL=https://github.mycompany.com/api/v3
+GITHUB_PROXY=http://proxy.corp.example.com:8080
+GITHUB_VERIFY_SSL=/etc/ssl/certs/corp-ca-bundle.crt
+GITHUB_TIMEOUT=30
+```
+
+---
+
+### Complete `.env` example for a GitHub App
+
+```dotenv
+# Auth
+GITHUB_APP_ID=123456
+GITHUB_APP_INSTALLATION_ID=78901234
+GITHUB_APP_PRIVATE_KEY_FILE=/run/secrets/github_app.pem
+```
 
 ---
 
