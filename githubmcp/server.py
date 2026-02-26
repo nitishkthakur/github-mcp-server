@@ -802,7 +802,7 @@ def _discover_pages_from_sitemap(base_url: str, timeout: int = _DEFAULT_REQUEST_
             "User-Agent": "GitHub-MCP-Server-Pages-Crawler/1.0",
         })
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(resp.text, "xml")
         for loc in soup.find_all("loc"):
             if loc.string:
                 urls.append(loc.string.strip())
