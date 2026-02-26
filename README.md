@@ -73,7 +73,7 @@ Copy the relevant `mcp.json` from either server directory and adjust the paths a
 | **Code search** | `search_code` |
 | **Issues** | `list_issues`, `create_issue` |
 
-### GitHub Pages retriever tools (NEW)
+### GitHub Pages retriever tools
 
 | Tool | Description |
 |---|---|

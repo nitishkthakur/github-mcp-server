@@ -671,7 +671,7 @@ def push_prompt_to_confluence(
                 json=[{"name": "prompt"}, {"name": "llm"}],
                 timeout=_get_timeout(),
             )
-    except Exception:
+    except (requests.RequestException, KeyError, ValueError):
         pass  # Labels are nice-to-have, not critical
 
     return result
@@ -705,7 +705,7 @@ def _markdown_to_storage(md: str) -> str:
                 code_lines = []
             else:
                 in_code_block = False
-                code_content = _escape_html("\n".join(code_lines))
+                code_content = "\n".join(code_lines)
                 if code_lang:
                     html_parts.append(
                         f'<ac:structured-macro ac:name="code">'
@@ -714,7 +714,7 @@ def _markdown_to_storage(md: str) -> str:
                         f"</ac:plain-text-body></ac:structured-macro>"
                     )
                 else:
-                    html_parts.append(f"<pre><code>{code_content}</code></pre>")
+                    html_parts.append(f"<pre><code>{_escape_html(code_content)}</code></pre>")
             continue
 
         if in_code_block:
