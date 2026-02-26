@@ -5,6 +5,7 @@ Provides tools to:
 - Read/write files and prompts in GitHub repositories
 - Deploy content to GitHub Pages
 - Manage branches, commits, issues, and repositories
+- Search and retrieve GitHub Pages content as Markdown for LLMs
 
 Authentication styles supported (checked in priority order):
 1. Explicit ``token`` argument passed directly to any tool
@@ -29,12 +30,20 @@ Connection / firewall options (all via environment variables):
 """
 
 import os
+import re
+import logging
 from typing import Optional
+from urllib.parse import urljoin, urlparse
 
+import requests
+from bs4 import BeautifulSoup
+from markdownify import markdownify as html_to_md
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 from github import Auth, Github, GithubException
 from github import InputGitAuthor
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -749,6 +758,438 @@ def create_issue(
         kwargs["labels"] = labels
     issue = repository.create_issue(**kwargs)
     return f"Created issue #{issue.number}: {issue.title}\n{issue.html_url}"
+
+
+# ---------------------------------------------------------------------------
+# GitHub Pages retriever – internal helpers
+# ---------------------------------------------------------------------------
+
+_DEFAULT_TIMEOUT = 15
+_MAX_PAGE_SIZE = 500_000  # 500 KB limit per page to avoid memory issues
+
+
+def _pages_session() -> requests.Session:
+    """
+    Return a ``requests.Session`` configured with proxy / SSL settings from the
+    environment (same knobs as the GitHub API client).
+    """
+    session = requests.Session()
+    session.headers["User-Agent"] = "github-mcp-pages-retriever/1.0"
+
+    verify_env = os.getenv("GITHUB_VERIFY_SSL", "true").strip().lower()
+    if verify_env == "false":
+        session.verify = False
+    elif verify_env not in ("true", "1", "yes", ""):
+        session.verify = verify_env
+
+    proxy = os.getenv("GITHUB_PROXY")
+    if proxy:
+        session.proxies = {"http": proxy, "https": proxy}
+
+    return session
+
+
+def _resolve_pages_base_url(owner: str, repo: str) -> str:
+    """
+    Return the GitHub Pages base URL for a repository.
+
+    Convention:
+    - ``<owner>.github.io/<repo>/`` for project sites
+    - ``<owner>.github.io/`` when repo name equals ``<owner>.github.io``
+
+    For GitHub Enterprise Server the host part is derived from
+    ``GITHUB_BASE_URL`` (pages are typically served from the same domain with
+    a ``/pages/<owner>/<repo>`` path, but this varies by GHES config).
+    """
+    base_url = os.getenv("GITHUB_BASE_URL", "")
+    if base_url:
+        parsed = urlparse(base_url)
+        host = parsed.hostname or "github.com"
+        scheme = parsed.scheme or "https"
+        if repo.lower() == f"{owner.lower()}.{host}":
+            return f"{scheme}://{owner}.{host}/"
+        return f"{scheme}://pages.{host}/{owner}/{repo}/"
+
+    # Standard github.io convention
+    if repo.lower() == f"{owner.lower()}.github.io":
+        return f"https://{owner}.github.io/"
+    return f"https://{owner}.github.io/{repo}/"
+
+
+def _fetch_page(url: str, session: requests.Session) -> Optional[str]:
+    """Fetch a single page, returning its HTML text or None on error."""
+    try:
+        timeout = int(os.getenv("GITHUB_TIMEOUT", str(_DEFAULT_TIMEOUT)))
+    except ValueError:
+        timeout = _DEFAULT_TIMEOUT
+    try:
+        resp = session.get(url, timeout=timeout, allow_redirects=True)
+        if resp.status_code != 200:
+            return None
+        content_type = resp.headers.get("Content-Type", "")
+        if "text/html" not in content_type and "text/plain" not in content_type:
+            return None
+        if len(resp.content) > _MAX_PAGE_SIZE:
+            return resp.text[:_MAX_PAGE_SIZE]
+        return resp.text
+    except requests.RequestException as exc:
+        logger.debug("Failed to fetch %s: %s", url, exc)
+        return None
+
+
+def _extract_links(html: str, base_url: str) -> list[str]:
+    """
+    Extract all internal links from an HTML page that stay within the
+    same GitHub Pages site.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    base_parsed = urlparse(base_url)
+    links: list[str] = []
+    seen: set[str] = set()
+    for anchor in soup.find_all("a", href=True):
+        href = anchor["href"]
+        # Skip fragments, mailto, javascript links
+        if href.startswith(("#", "mailto:", "javascript:")):
+            continue
+        abs_url = urljoin(base_url, href)
+        abs_parsed = urlparse(abs_url)
+        # Only keep links on the same host and under the same path prefix
+        if abs_parsed.hostname != base_parsed.hostname:
+            continue
+        if not abs_parsed.path.startswith(base_parsed.path):
+            continue
+        # Normalise: strip fragment
+        normalised = abs_parsed._replace(fragment="").geturl()
+        if normalised not in seen:
+            seen.add(normalised)
+            links.append(normalised)
+    return links
+
+
+def _discover_pages(
+    base_url: str,
+    session: requests.Session,
+    max_pages: int = 50,
+) -> list[str]:
+    """
+    Discover pages on a GitHub Pages site by:
+    1. Trying ``sitemap.xml`` first (standard for Jekyll/Hugo/MkDocs sites).
+    2. Falling back to breadth-first crawling of internal links.
+
+    Returns a list of absolute URLs (at most *max_pages*).
+    """
+    discovered: list[str] = []
+    seen: set[str] = set()
+
+    # --- Attempt 1: sitemap.xml -------------------------------------------
+    sitemap_url = urljoin(base_url, "sitemap.xml")
+    sitemap_html = _fetch_page(sitemap_url, session)
+    if sitemap_html:
+        try:
+            soup = BeautifulSoup(sitemap_html, "xml")
+        except Exception:
+            soup = BeautifulSoup(sitemap_html, "html.parser")
+        for loc in soup.find_all("loc"):
+            url = (loc.get_text() or "").strip()
+            if url and url not in seen:
+                seen.add(url)
+                discovered.append(url)
+                if len(discovered) >= max_pages:
+                    return discovered
+
+    # --- Attempt 2: BFS crawl from root -----------------------------------
+    queue: list[str] = [base_url]
+    if base_url not in seen:
+        seen.add(base_url)
+        discovered.append(base_url)
+
+    while queue and len(discovered) < max_pages:
+        current_url = queue.pop(0)
+        html = _fetch_page(current_url, session)
+        if html is None:
+            continue
+        for link in _extract_links(html, base_url):
+            if link not in seen:
+                seen.add(link)
+                discovered.append(link)
+                queue.append(link)
+                if len(discovered) >= max_pages:
+                    break
+
+    return discovered
+
+
+def _html_to_clean_markdown(html: str) -> str:
+    """
+    Convert HTML to clean Markdown suitable for LLM consumption.
+
+    Strips navigation, sidebars, footers, and script/style elements to
+    focus on the main content.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Remove elements that add noise for LLMs
+    for tag_name in ("script", "style", "nav", "footer", "header", "noscript"):
+        for tag in soup.find_all(tag_name):
+            tag.decompose()
+
+    # Remove common non-content elements by class/id patterns
+    noise_patterns = re.compile(
+        r"(sidebar|navigation|menu|breadcrumb|footer|header|cookie|banner|ads|"
+        r"skip-to|search-form|social|share-buttons)",
+        re.IGNORECASE,
+    )
+    for tag in soup.find_all(attrs={"class": noise_patterns}):
+        tag.decompose()
+    for tag in soup.find_all(attrs={"id": noise_patterns}):
+        tag.decompose()
+
+    # Prefer <main> or <article> if present
+    main = soup.find("main") or soup.find("article") or soup.find(
+        "div", {"role": "main"}
+    )
+    target = main if main else soup.body if soup.body else soup
+
+    md = html_to_md(str(target), heading_style="ATX", strip=["img"])
+    # Clean up excessive blank lines
+    md = re.sub(r"\n{3,}", "\n\n", md).strip()
+    return md
+
+
+def _score_page(
+    url: str,
+    text: str,
+    pattern: "re.Pattern[str]",
+) -> tuple[int, list[str]]:
+    """
+    Score a page by counting regex matches and collecting context snippets.
+    Returns (match_count, snippets).
+    """
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return 0, []
+
+    snippets: list[str] = []
+    for m in matches[:5]:  # limit snippets to 5 per page
+        start = max(0, m.start() - 100)
+        end = min(len(text), m.end() + 100)
+        snippet = text[start:end].replace("\n", " ").strip()
+        snippets.append(f"...{snippet}...")
+
+    return len(matches), snippets
+
+
+# ---------------------------------------------------------------------------
+# GitHub Pages retriever – MCP tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def get_github_pages_sitemap(
+    owner: str,
+    repo: str,
+    max_pages: int = 50,
+    custom_domain: Optional[str] = None,
+) -> str:
+    """
+    Discover all pages on a GitHub Pages site.
+
+    Tries the sitemap.xml first (standard for Jekyll, Hugo, MkDocs sites),
+    then falls back to crawling internal links from the landing page.
+
+    Args:
+        owner: Repository owner.
+        repo: Repository name.
+        max_pages: Maximum number of pages to discover. Defaults to 50.
+        custom_domain: Optional custom domain if the site uses one instead of
+                       the default <owner>.github.io/<repo> URL.
+    """
+    if max_pages < 1:
+        max_pages = 1
+    if max_pages > 200:
+        max_pages = 200
+
+    base_url = custom_domain.rstrip("/") + "/" if custom_domain else _resolve_pages_base_url(owner, repo)
+    session = _pages_session()
+    pages = _discover_pages(base_url, session, max_pages=max_pages)
+    if not pages:
+        return (
+            f"No pages found for {owner}/{repo}.\n"
+            f"Base URL tried: {base_url}\n"
+            "The repository may not have GitHub Pages enabled, or the site "
+            "may require authentication."
+        )
+    header = f"Found {len(pages)} page(s) on {base_url}\n"
+    return header + "\n".join(f"  {url}" for url in pages)
+
+
+@mcp.tool()
+def fetch_github_page_as_markdown(
+    url: str,
+) -> str:
+    """
+    Fetch a single web page and convert it to clean Markdown.
+
+    Strips navigation, sidebars, footers, and script/style tags so the
+    output is optimised for LLM consumption.
+
+    Args:
+        url: The full URL of the page to fetch.
+    """
+    session = _pages_session()
+    html = _fetch_page(url, session)
+    if html is None:
+        return f"Failed to fetch page at {url} (not found or not HTML)."
+    md = _html_to_clean_markdown(html)
+    if not md:
+        return f"Page at {url} returned no meaningful text content."
+    return f"# Source: {url}\n\n{md}"
+
+
+@mcp.tool()
+def search_github_pages(
+    owner: str,
+    repo: str,
+    regex: str,
+    max_pages: int = 50,
+    top_k: int = 5,
+    custom_domain: Optional[str] = None,
+    case_insensitive: bool = True,
+) -> str:
+    """
+    Search through a GitHub Pages site using a regex pattern and return the
+    most relevant pages as Markdown – a regex-based retriever for LLMs.
+
+    How it works:
+    1. Discovers all pages on the site (sitemap.xml → BFS crawl fallback).
+    2. Fetches each page and converts it to Markdown.
+    3. Matches the regex against the Markdown text.
+    4. Ranks pages by match count and returns the top-k pages with context
+       snippets and their full Markdown content.
+
+    Args:
+        owner: Repository owner.
+        repo: Repository name.
+        regex: Regular expression pattern to search for across all pages.
+        max_pages: Maximum number of pages to crawl and search. Defaults to 50.
+        top_k: Number of top-matching pages to return in full. Defaults to 5.
+        custom_domain: Optional custom domain for the GitHub Pages site.
+        case_insensitive: Whether to search case-insensitively. Defaults to True.
+    """
+    if max_pages < 1:
+        max_pages = 1
+    if max_pages > 200:
+        max_pages = 200
+    if top_k < 1:
+        top_k = 1
+    if top_k > 20:
+        top_k = 20
+
+    # Compile regex
+    flags = re.IGNORECASE if case_insensitive else 0
+    try:
+        pattern = re.compile(regex, flags)
+    except re.error as exc:
+        return f"Invalid regex pattern: {exc}"
+
+    base_url = custom_domain.rstrip("/") + "/" if custom_domain else _resolve_pages_base_url(owner, repo)
+    session = _pages_session()
+
+    # Discover pages
+    page_urls = _discover_pages(base_url, session, max_pages=max_pages)
+    if not page_urls:
+        return (
+            f"No pages found for {owner}/{repo}.\n"
+            f"Base URL tried: {base_url}\n"
+            "The repository may not have GitHub Pages enabled."
+        )
+
+    # Fetch, convert, and score each page
+    scored: list[tuple[int, str, str, list[str]]] = []  # (score, url, md, snippets)
+    for url in page_urls:
+        html = _fetch_page(url, session)
+        if html is None:
+            continue
+        md = _html_to_clean_markdown(html)
+        if not md:
+            continue
+        score, snippets = _score_page(url, md, pattern)
+        if score > 0:
+            scored.append((score, url, md, snippets))
+
+    if not scored:
+        return (
+            f"Searched {len(page_urls)} page(s) on {base_url} but found no "
+            f"matches for pattern: {regex}"
+        )
+
+    # Sort by score descending
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top_results = scored[:top_k]
+
+    # Build output
+    parts: list[str] = [
+        f"Found {len(scored)} page(s) with matches (showing top {len(top_results)}).",
+        f"Pattern: {regex}",
+        f"Site: {base_url}",
+        "",
+    ]
+
+    for rank, (score, url, md, snippets) in enumerate(top_results, 1):
+        parts.append(f"{'=' * 60}")
+        parts.append(f"## Result {rank} — {url}")
+        parts.append(f"Matches: {score}")
+        if snippets:
+            parts.append("Context snippets:")
+            for snip in snippets:
+                parts.append(f"  • {snip}")
+        parts.append("")
+        parts.append(md)
+        parts.append("")
+
+    return "\n".join(parts)
+
+
+@mcp.tool()
+def search_github_pages_multi(
+    owner: str,
+    repo: str,
+    keywords: list[str],
+    max_pages: int = 50,
+    top_k: int = 5,
+    custom_domain: Optional[str] = None,
+) -> str:
+    """
+    Search a GitHub Pages site using multiple keywords (combined with OR logic)
+    and return the most relevant pages as Markdown.
+
+    This is a convenience wrapper around ``search_github_pages`` for
+    natural-language queries: supply a list of keywords and the tool
+    builds a regex that matches any of them, ranking pages that mention
+    more keywords higher.
+
+    Args:
+        owner: Repository owner.
+        repo: Repository name.
+        keywords: List of keywords / phrases to search for.
+        max_pages: Maximum number of pages to crawl. Defaults to 50.
+        top_k: Number of top-matching pages to return. Defaults to 5.
+        custom_domain: Optional custom domain for the GitHub Pages site.
+    """
+    if not keywords:
+        return "At least one keyword is required."
+    # Escape each keyword for safe regex usage, join with OR
+    escaped = [re.escape(kw) for kw in keywords]
+    combined = "|".join(escaped)
+    return search_github_pages(
+        owner=owner,
+        repo=repo,
+        regex=combined,
+        max_pages=max_pages,
+        top_k=top_k,
+        custom_domain=custom_domain,
+        case_insensitive=True,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
   "mcpServers": {
     "github-mcp-server": {
       "command": "python",
-      "args": ["server.py"],
+      "args": ["githubmcp/server.py"],
       "env": {
         "GITHUB_TOKEN": "<your-github-personal-access-token>"
       },
@@ -14,7 +14,7 @@
 
     "pat": {
       "command": "python",
-      "args": ["server.py"],
+      "args": ["githubmcp/server.py"],
       "env": {
         "GITHUB_TOKEN": "<ghp_xxxxxxxxxxxx>"
       }
@@ -22,7 +22,7 @@
 
     "pat_from_file": {
       "command": "python",
-      "args": ["server.py"],
+      "args": ["githubmcp/server.py"],
       "env": {
         "GITHUB_TOKEN_FILE": "/run/secrets/github_token"
       }
@@ -30,7 +30,7 @@
 
     "github_app_installation": {
       "command": "python",
-      "args": ["server.py"],
+      "args": ["githubmcp/server.py"],
       "env": {
         "GITHUB_APP_ID": "<123456>",
         "GITHUB_APP_INSTALLATION_ID": "<78901234>",
@@ -40,7 +40,7 @@
 
     "oauth_app": {
       "command": "python",
-      "args": ["server.py"],
+      "args": ["githubmcp/server.py"],
       "env": {
         "GITHUB_CLIENT_ID": "<Iv1.xxxxxxxxxxxx>",
         "GITHUB_CLIENT_SECRET": "<secret>",
@@ -50,7 +50,7 @@
 
     "netrc": {
       "command": "python",
-      "args": ["server.py"],
+      "args": ["githubmcp/server.py"],
       "env": {
         "GITHUB_USE_NETRC": "true"
       }
@@ -58,7 +58,7 @@
 
     "github_enterprise_with_proxy": {
       "command": "python",
-      "args": ["server.py"],
+      "args": ["githubmcp/server.py"],
       "env": {
         "GITHUB_TOKEN": "<your-ghes-token>",
         "GITHUB_BASE_URL": "https://github.mycompany.com/api/v3",
@@ -70,7 +70,7 @@
 
     "corporate_firewall_ssl_disabled": {
       "command": "python",
-      "args": ["server.py"],
+      "args": ["githubmcp/server.py"],
       "env": {
         "GITHUB_TOKEN": "<your-token>",
         "GITHUB_PROXY": "http://proxy.corp.example.com:8080",
