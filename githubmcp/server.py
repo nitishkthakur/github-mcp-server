@@ -885,10 +885,14 @@ def _discover_pages(
     sitemap_url = urljoin(base_url, "sitemap.xml")
     sitemap_html = _fetch_page(sitemap_url, session)
     if sitemap_html:
+        import warnings
+        from bs4 import XMLParsedAsHTMLWarning
         try:
             soup = BeautifulSoup(sitemap_html, "xml")
         except Exception:
-            soup = BeautifulSoup(sitemap_html, "html.parser")
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+                soup = BeautifulSoup(sitemap_html, "html.parser")
         for loc in soup.find_all("loc"):
             url = (loc.get_text() or "").strip()
             if url and url not in seen:

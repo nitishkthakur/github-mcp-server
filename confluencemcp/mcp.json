@@ -1,0 +1,48 @@
+{
+  "mcpServers": {
+    "confluence-mcp-server": {
+      "command": "python",
+      "args": ["confluencemcp/server.py"],
+      "env": {
+        "CONFLUENCE_URL": "https://mycompany.atlassian.net/wiki",
+        "CONFLUENCE_USERNAME": "<your-email>",
+        "CONFLUENCE_API_TOKEN": "<your-api-token>"
+      },
+      "description": "Confluence MCP Server – search, read, and write Confluence pages as Markdown for LLM context."
+    }
+  },
+  "_auth_examples": {
+    "_comment": "Copy the block you need into 'mcpServers' above.",
+
+    "api_token": {
+      "command": "python",
+      "args": ["confluencemcp/server.py"],
+      "env": {
+        "CONFLUENCE_URL": "https://mycompany.atlassian.net/wiki",
+        "CONFLUENCE_USERNAME": "<your-email>",
+        "CONFLUENCE_API_TOKEN": "<your-api-token>"
+      }
+    },
+
+    "personal_access_token": {
+      "command": "python",
+      "args": ["confluencemcp/server.py"],
+      "env": {
+        "CONFLUENCE_URL": "https://confluence.mycompany.com",
+        "CONFLUENCE_PERSONAL_TOKEN": "<your-pat>"
+      }
+    },
+
+    "with_proxy": {
+      "command": "python",
+      "args": ["confluencemcp/server.py"],
+      "env": {
+        "CONFLUENCE_URL": "https://mycompany.atlassian.net/wiki",
+        "CONFLUENCE_USERNAME": "<your-email>",
+        "CONFLUENCE_API_TOKEN": "<your-api-token>",
+        "CONFLUENCE_PROXY": "http://proxy.corp.example.com:8080",
+        "CONFLUENCE_VERIFY_SSL": "false"
+      }
+    }
+  }
+}

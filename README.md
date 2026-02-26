@@ -1,423 +1,137 @@
-# GitHub MCP Server
+# MCP Servers – GitHub & Confluence
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server built with
-[fastmcp](https://github.com/jlowin/fastmcp) that exposes GitHub operations as MCP
-tools. Use it to let an offline LLM (or any MCP-compatible client such as
-**GitHub Copilot**) read and write files, manage prompts, deploy GitHub Pages, and
-perform common repository operations — all through natural language.
+A monorepo containing two [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers built with [fastmcp](https://github.com/jlowin/fastmcp):
 
----
-
-## ✨ Features at a glance
-
-| Category | Tools |
-|---|---|
-| **File I/O** | `get_file_contents`, `create_or_update_file`, `delete_file` |
-| **Prompt management** | `list_prompts`, `get_prompt`, `push_prompt` |
-| **GitHub Pages** | `deploy_to_github_pages` |
-| **Repository info** | `list_repos`, `get_repo_info` |
-| **Branches** | `list_branches`, `create_branch` |
-| **Commits** | `list_commits` |
-| **Code search** | `search_code` |
-| **Issues** | `list_issues`, `create_issue` |
-
----
-
-## 🗺️ Tool map
-
-```mermaid
-graph TD
-    MCP["GitHub MCP Server"]
-
-    MCP --> FILES["File Operations"]
-    FILES --> get_file_contents
-    FILES --> create_or_update_file
-    FILES --> delete_file
-
-    MCP --> PROMPTS["Prompt Management"]
-    PROMPTS --> list_prompts
-    PROMPTS --> get_prompt
-    PROMPTS --> push_prompt
-
-    MCP --> PAGES["GitHub Pages"]
-    PAGES --> deploy_to_github_pages
-
-    MCP --> REPO["Repository Info"]
-    REPO --> list_repos
-    REPO --> get_repo_info
-
-    MCP --> BRANCHES["Branch Management"]
-    BRANCHES --> list_branches
-    BRANCHES --> create_branch
-
-    MCP --> COMMITS["Commit History"]
-    COMMITS --> list_commits
-
-    MCP --> SEARCH["Code Search"]
-    SEARCH --> search_code
-
-    MCP --> ISSUES["Issue Tracking"]
-    ISSUES --> list_issues
-    ISSUES --> create_issue
-```
-
----
-
-## 🚀 Quick start
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/<your-username>/github-mcp-server.git
-cd github-mcp-server
-```
-
-### 2. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Set your GitHub token
-
-Create a [Personal Access Token](https://github.com/settings/tokens) with the
-scopes you need (typically `repo` and `read:user`) and export it:
-
-```bash
-export GITHUB_TOKEN="ghp_xxxxxxxxxxxx"
-```
-
-Alternatively, create a `.env` file in the project root:
-
-```
-GITHUB_TOKEN=ghp_xxxxxxxxxxxx
-```
-
-### 4. Run the server
-
-```bash
-python server.py
-```
-
----
-
-## 🔌 Loading into GitHub Copilot
-
-Copy the `mcp.json` file from this repository to your workspace (or user-level MCP
-config directory), then replace the placeholder token:
-
-```json
-{
-  "mcpServers": {
-    "github-mcp-server": {
-      "command": "python",
-      "args": ["server.py"],
-      "env": {
-        "GITHUB_TOKEN": "<your-github-personal-access-token>"
-      }
-    }
-  }
-}
-```
-
-> **Tip:** In VS Code with the Copilot extension, place this file at
-> `.vscode/mcp.json` inside your workspace, or at
-> `~/.config/github-copilot/mcp.json` for a user-wide configuration.
-
----
-
-## 🔧 Tool reference
-
-### File operations
-
-#### `get_file_contents`
-Return the text content of a file (or a directory listing if the path is a
-directory).
-
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `owner` | str | required | Repository owner |
-| `repo` | str | required | Repository name |
-| `path` | str | required | File path inside the repo |
-| `ref` | str | `"main"` | Branch, tag, or commit SHA |
-| `token` | str | env var | GitHub PAT |
-
-#### `create_or_update_file`
-Create a new file or update an existing file.
-
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `owner` | str | required | Repository owner |
-| `repo` | str | required | Repository name |
-| `path` | str | required | Destination file path |
-| `content` | str | required | Text content to write |
-| `commit_message` | str | required | Git commit message |
-| `branch` | str | `"main"` | Target branch |
-| `author_name` | str | — | Commit author name |
-| `author_email` | str | — | Commit author email |
-| `token` | str | env var | GitHub PAT |
-
-#### `delete_file`
-Delete a file and create a commit.
-
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `owner` | str | required | Repository owner |
-| `repo` | str | required | Repository name |
-| `path` | str | required | File path to delete |
-| `commit_message` | str | required | Git commit message |
-| `branch` | str | `"main"` | Target branch |
-| `token` | str | env var | GitHub PAT |
-
----
-
-### Prompt management
-
-Store prompt files (plain text, Markdown, `.prompt`) in a dedicated directory
-inside any repo (default: `prompts/`).
-
-#### `list_prompts`
-List all files in the prompts directory.
-
-#### `get_prompt`
-Fetch a prompt by name. Tries exact name first, then appends `.txt`, `.md`,
-and `.prompt` suffixes.
-
-#### `push_prompt`
-Create or update a prompt file.
-
----
-
-### GitHub Pages
-
-#### `deploy_to_github_pages`
-Write a file to the `gh-pages` branch (or any other pages branch), triggering
-a GitHub Pages rebuild.
-
-```
-deploy_to_github_pages(owner, repo, file_path, content, pages_branch="gh-pages")
-```
-
----
-
-### Repository info
-
-#### `list_repos`
-List repositories for the authenticated user, with optional visibility and sort
-filters.
-
-#### `get_repo_info`
-Return name, description, stars, forks, open issues, default branch, URL, and
-topics for a repository.
-
----
-
-### Branch management
-
-#### `list_branches`
-List all branches in a repository.
-
-#### `create_branch`
-Create a new branch from an existing branch or the default branch.
-
----
-
-### Commit history
-
-#### `list_commits`
-Return a table of recent commits (SHA, date, message) for a branch.
-
----
-
-### Code search
-
-#### `search_code`
-Search code using GitHub's code search syntax. Optionally scope to an owner
-or a specific repository.
-
----
-
-### Issue tracking
-
-#### `list_issues`
-List open (or closed / all) issues in a repository.
-
-#### `create_issue`
-Open a new issue with an optional body and labels.
-
----
-
-## 🔑 Authentication
-
-The server supports **eight authentication strategies** tried in the priority
-order listed below.  All tools also accept an optional `token` argument that
-immediately overrides every environment-based strategy.
-
----
-
-### Strategy 1 – Personal / Fine-grained Access Token *(most common)*
-
-```
-GITHUB_TOKEN=ghp_xxxxxxxxxxxx
-# or
-GH_TOKEN=ghp_xxxxxxxxxxxx
-# or
-GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxxxxxxxxxxx
-```
-
----
-
-### Strategy 2 – Token stored in a file
-
-Useful when secrets management injects tokens as files (e.g. Kubernetes
-Secrets, Docker secrets).
-
-```
-GITHUB_TOKEN_FILE=/run/secrets/github_token
-```
-
-The first line of the file is used as the token.
-
----
-
-### Strategy 3 – GitHub App Installation auth *(recommended for organisations)*
-
-```
-GITHUB_APP_ID=123456
-GITHUB_APP_INSTALLATION_ID=78901234
-GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
-# or store the key in a file:
-GITHUB_APP_PRIVATE_KEY_FILE=/run/secrets/github_app.pem
-```
-
-`GITHUB_APP_PRIVATE_KEY` may contain literal `\n` sequences — they are
-automatically expanded to real newlines.
-
----
-
-### Strategy 4 – GitHub App JWT (app-level, no installation)
-
-Same as strategy 3 but **without** `GITHUB_APP_INSTALLATION_ID`.  Grants
-access to app-level API endpoints only (e.g. listing installations).
-
-```
-GITHUB_APP_ID=123456
-GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n..."
-```
-
----
-
-### Strategy 5 – OAuth App user token
-
-```
-GITHUB_CLIENT_ID=Iv1.abcdef123456
-GITHUB_CLIENT_SECRET=abc123...
-GITHUB_OAUTH_TOKEN=ghu_xxxxxxxxxxxx
-```
-
----
-
-### Strategy 6 – Login + password *(deprecated by GitHub)*
-
-```
-GITHUB_LOGIN=myusername
-GITHUB_PASSWORD=mypassword
-```
-
-> ⚠️ GitHub has deprecated password authentication for the API.
-> Use a PAT or GitHub App instead where possible.
-
----
-
-### Strategy 7 – `.netrc` credentials
-
-```
-GITHUB_USE_NETRC=true
-```
-
-The server reads credentials from `~/.netrc` for `api.github.com` (or for the
-`GITHUB_BASE_URL` host when using GHES).
-
----
-
-## 🌐 Corporate firewall & enterprise options
-
-All settings below are controlled via environment variables and are **combined
-with whichever auth strategy is active**.
-
-### GitHub Enterprise Server (GHES)
-
-```
-GITHUB_BASE_URL=https://github.mycompany.com/api/v3
-```
-
-### HTTP/HTTPS proxy
-
-```
-# Option A – GITHUB_PROXY (alias for HTTPS_PROXY + HTTP_PROXY)
-GITHUB_PROXY=http://proxy.corp.example.com:8080
-
-# Option B – standard env vars (picked up automatically by requests)
-HTTPS_PROXY=http://proxy.corp.example.com:8080
-HTTP_PROXY=http://proxy.corp.example.com:8080
-```
-
-> **SOCKS proxy** is also supported by `requests`:
-> `GITHUB_PROXY=socks5://proxy.corp.example.com:1080`
-> (requires `pip install requests[socks]`)
-
-### SSL / TLS inspection (corporate MITM proxies)
-
-```
-# Disable SSL verification entirely (not recommended for production)
-GITHUB_VERIFY_SSL=false
-
-# OR provide the path to your corporate CA bundle
-GITHUB_VERIFY_SSL=/etc/ssl/certs/corp-ca-bundle.crt
-```
-
-### Request timeout
-
-```
-GITHUB_TIMEOUT=30    # seconds (default: 15)
-```
-
----
-
-### Complete `.env` example for a corporate environment
-
-```dotenv
-# Auth
-GITHUB_TOKEN=ghp_xxxxxxxxxxxx
-
-# Enterprise / firewall
-GITHUB_BASE_URL=https://github.mycompany.com/api/v3
-GITHUB_PROXY=http://proxy.corp.example.com:8080
-GITHUB_VERIFY_SSL=/etc/ssl/certs/corp-ca-bundle.crt
-GITHUB_TIMEOUT=30
-```
-
----
-
-### Complete `.env` example for a GitHub App
-
-```dotenv
-# Auth
-GITHUB_APP_ID=123456
-GITHUB_APP_INSTALLATION_ID=78901234
-GITHUB_APP_PRIVATE_KEY_FILE=/run/secrets/github_app.pem
-```
+| Server | Directory | Description |
+|---|---|---|
+| **GitHub MCP Server** | [`githubmcp/`](githubmcp/) | Read/write files, manage prompts, deploy GitHub Pages, search repositories, and **search & retrieve GitHub Pages content as Markdown for LLMs** |
+| **Confluence MCP Server** | [`confluencemcp/`](confluencemcp/) | Search, navigate, read Confluence pages as clean Markdown, and push documentation / prompts back to Confluence — optimised for LLM context retrieval |
 
 ---
 
 ## 📁 Project structure
 
 ```
-github-mcp-server/
-├── server.py          # FastMCP server with all tools
-├── requirements.txt   # Python dependencies
-├── mcp.json           # MCP configuration for GitHub Copilot
-└── README.md          # This file
+├── githubmcp/                  # GitHub MCP Server
+│   ├── server.py               # FastMCP server with all tools
+│   ├── requirements.txt        # Python dependencies
+│   ├── mcp.json                # MCP configuration
+│   └── tests/
+│       └── test_pages_retriever.py
+├── confluencemcp/              # Confluence MCP Server
+│   ├── server.py               # FastMCP server with all tools
+│   ├── requirements.txt        # Python dependencies
+│   ├── mcp.json                # MCP configuration
+│   └── tests/
+│       └── test_confluence.py
+├── README.md                   # This file
+└── LICENSE
+```
+
+---
+
+## 🚀 Quick start
+
+### GitHub MCP Server
+
+```bash
+pip install -r githubmcp/requirements.txt
+export GITHUB_TOKEN="ghp_xxxxxxxxxxxx"
+python githubmcp/server.py
+```
+
+### Confluence MCP Server
+
+```bash
+pip install -r confluencemcp/requirements.txt
+export CONFLUENCE_URL="https://mycompany.atlassian.net/wiki"
+export CONFLUENCE_USERNAME="your-email@company.com"
+export CONFLUENCE_API_TOKEN="your-api-token"
+python confluencemcp/server.py
+```
+
+---
+
+## 🔌 Loading into GitHub Copilot / MCP Clients
+
+Copy the relevant `mcp.json` from either server directory and adjust the paths and credentials. See each server's directory for full configuration examples.
+
+---
+
+## GitHub MCP Server – Tool reference
+
+### Original tools
+
+| Category | Tools |
+|---|---|
+| **File I/O** | `get_file_contents`, `create_or_update_file`, `delete_file` |
+| **Prompt management** | `list_prompts`, `get_prompt`, `push_prompt` |
+| **GitHub Pages deploy** | `deploy_to_github_pages` |
+| **Repository info** | `list_repos`, `get_repo_info` |
+| **Branches** | `list_branches`, `create_branch` |
+| **Commits** | `list_commits` |
+| **Code search** | `search_code` |
+| **Issues** | `list_issues`, `create_issue` |
+
+### GitHub Pages retriever tools (NEW)
+
+| Tool | Description |
+|---|---|
+| `search_github_pages` | **Regex-based retriever for LLMs.** Crawls a GitHub Pages site (sitemap.xml → BFS fallback), searches all pages with a regex, and returns the top-matching pages as clean Markdown with context snippets. |
+| `search_github_pages_multi` | Multi-keyword convenience wrapper — supply a list of keywords, pages mentioning more keywords rank higher. |
+| `get_github_pages_sitemap` | Discover all pages on a GitHub Pages site (sitemap.xml or link crawling). |
+| `fetch_github_page_as_markdown` | Fetch any web page and convert to clean Markdown (strips nav, sidebar, footer, scripts). |
+
+#### How `search_github_pages` works
+
+1. **Discovery** — Tries `sitemap.xml` first, then falls back to breadth-first crawl of internal links.
+2. **Fetch & convert** — Each discovered page is fetched and converted to clean Markdown (nav, sidebar, footer, scripts stripped).
+3. **Regex match & rank** — The regex pattern is matched against the Markdown text. Pages are ranked by match count.
+4. **Return top-k** — The top-k pages are returned with full Markdown content and context snippets around each match.
+
+---
+
+## Confluence MCP Server – Tool reference
+
+| Tool | Description |
+|---|---|
+| `search_confluence` | CQL-based full-text search returning results as clean Markdown |
+| `search_by_label` | Find pages with a specific label |
+| `get_page_content` | Retrieve a page by ID as Markdown |
+| `get_page_by_title` | Retrieve a page by space key + title |
+| `get_page_tree` | Get page hierarchy (child pages) for understanding structure |
+| `list_spaces` | List available Confluence spaces |
+| `push_documentation` | Create or update a documentation page (Markdown → Confluence storage) |
+| `push_prompt_to_confluence` | Push a prompt as a labelled Confluence page |
+
+### Confluence authentication
+
+| Strategy | Environment Variables |
+|---|---|
+| API Token (Cloud) | `CONFLUENCE_URL` + `CONFLUENCE_USERNAME` + `CONFLUENCE_API_TOKEN` |
+| Personal Access Token (Data Center) | `CONFLUENCE_URL` + `CONFLUENCE_PERSONAL_TOKEN` |
+
+Additional options: `CONFLUENCE_VERIFY_SSL`, `CONFLUENCE_TIMEOUT`, `CONFLUENCE_PROXY`.
+
+---
+
+## 🔑 GitHub authentication
+
+The GitHub MCP server supports **eight authentication strategies** — see [`githubmcp/server.py`](githubmcp/server.py) header for full details.
+
+Most common:
+
+```bash
+export GITHUB_TOKEN="ghp_xxxxxxxxxxxx"
+```
+
+---
+
+## 🧪 Running tests
+
+```bash
+pip install pytest
+python -m pytest -v
 ```
 
 ---
